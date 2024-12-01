@@ -1,0 +1,70 @@
+id: myflow
+namespace: company.team
+
+inputs:
+  - id: accessKeyId
+    type: STRING
+    defaults: <accessKey>
+  - id: secretKeyId
+    type: STRING
+    defaults: <secretKey>
+  - id: region
+    type: STRING
+    defaults: us-east-1
+  - id: discord_url
+    type: STRING
+    defaults: <discord_url>
+  - id: discord_avatar
+    type: STRING
+    defaults: https://cloud-icons.onemodel.app/aws/Architecture-Service-Icons_01312023/Arch_Cloud-Financial-Management/64/Arch_AWS-Cost-Explorer_64@5x.png
+
+tasks:
+  - id: cost_explorer
+    type: io.kestra.plugin.aws.cli.AwsCLI
+    accessKeyId: "{{ inputs.accessKeyId }}"
+    secretKeyId: "{{ inputs.secretKeyId }}"
+    region: "{{ inputs.region }}"
+    commands:
+      - aws ce get-cost-and-usage --time-period Start=2024-11-01,End=2024-12-01 --granularity DAILY --metrics "BlendedCost" --group-by Type=DIMENSION,Key=SERVICE > "output"
+    namespaceFiles:
+      enabled: true
+    outputFiles:
+      - "output"
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+
+  - id: python_script
+    type: io.kestra.plugin.scripts.python.Commands
+    namespaceFiles:
+      enabled: true
+    inputFiles:
+      file: "{{ outputs.cost_explorer.outputFiles.output }}"
+    beforeCommands:
+      - cp file COMPANY.TEAM/scripts/output.json
+      - python3 -m venv .myenv
+      - . .myenv/bin/activate
+      - pip install -r COMPANY.TEAM/scripts/requirements.txt
+    commands:
+      - python COMPANY.TEAM/scripts/script.py
+    outputFiles:
+      - "report"
+    runner: PROCESS
+
+  - id: discord_message
+    type: io.kestra.plugin.notifications.discord.DiscordExecution
+    avatarUrl: "{{ inputs.discord_avatar }}"
+    content: |
+      💰 **Monthly AWS Usage Report (November 2024)**
+
+      **Total Cost:** ${{ outputs.python_script.vars.total_cost }}
+
+      **Breakdown by Service:**
+      {{ outputs.python_script.vars.service_costs }}
+
+      📌 *Tip:* Review usage to identify cost-saving opportunities.
+    url: "{{ inputs.discord_url }}"
+
+triggers:
+  - id: hour_trigger
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 21 * * *"
